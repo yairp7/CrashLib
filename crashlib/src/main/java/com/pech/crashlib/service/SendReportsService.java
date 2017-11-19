@@ -7,8 +7,7 @@ import android.os.Looper;
 import android.os.ResultReceiver;
 import android.support.annotation.Nullable;
 
-import com.android.volley.Response;
-import com.android.volley.VolleyError;
+import com.android.volley.toolbox.RequestFuture;
 import com.pech.crashlib.CrashLib;
 import com.pech.crashlib.net.BaseRequest;
 import com.pech.crashlib.net.SendReportsRequest;
@@ -19,6 +18,7 @@ import com.pech.crashlib.utils.Constants;
 import com.pech.crashlib.utils.Logger;
 
 import java.util.List;
+import java.util.concurrent.ExecutionException;
 
 /**
  * Created by yairp on 08/11/2017.
@@ -38,48 +38,50 @@ public class SendReportsService extends IntentService
     public SendReportsService()
     {
         super("SendReportsService");
+        setIntentRedelivery(true);
     }
 
     @Override
     protected void onHandleIntent(@Nullable Intent intent)
     {
-        if(intent.getExtras().containsKey(PARAM_RECEIVER))
+        if(intent.getExtras() != null && intent.getExtras().containsKey(PARAM_RECEIVER))
         {
             mReceiver = intent.getParcelableExtra(PARAM_RECEIVER);
         }
 
-        if(intent.getExtras().containsKey(PARAM_REPORTS))
+        if(intent.getExtras() != null && intent.getExtras().containsKey(PARAM_REPORTS))
         {
             mResult = Constants.Results.RESULT_FAIL;
 
             final List<Report> reports = intent.getParcelableArrayListExtra(PARAM_REPORTS);
 
-            CrashLib.getInstance().getNetManager().sendRequest(new SendReportsRequest(reports, new Response.Listener<String>()
+            RequestFuture<String> future = RequestFuture.newFuture();
+
+            SendReportsRequest sendReportsRequest = new SendReportsRequest(reports, future, future);
+
+            CrashLib.getInstance().getNetManager().sendRequest(sendReportsRequest);
+
+            try
             {
-                @Override
-                public void onResponse(String response)
+                String response = future.get();
+
+                if(BaseRequest.isResponseValid(response))
                 {
-                    if(BaseRequest.isResponseValid(response))
-                    {
-                        mResult = Integer.parseInt(response);
+                    mResult = Integer.parseInt(response);
 
-                        if(mReceiver != null)
-                            mReceiver.send(mResult, null);
-
-                        deleteSentFiles(reports);
-                    }
+                    deleteSentFiles(reports);
                 }
-            }, new Response.ErrorListener()
+
+                if(mReceiver != null)
+                    mReceiver.send(mResult, null);
+            }
+            catch(InterruptedException | ExecutionException e)
             {
-                @Override
-                public void onErrorResponse(VolleyError error)
-                {
-                    Logger.log(error.toString());
+                Logger.log(e.toString());
 
-                    if(mReceiver != null)
-                        mReceiver.send(mResult, null);
-                }
-            }));
+                if(mReceiver != null)
+                    mReceiver.send(mResult, null);
+            }
         }
     }
 
